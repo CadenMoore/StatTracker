@@ -1,13 +1,51 @@
-import React, {useState} from 'react';
-import { StyleSheet, Text, View, Pressable, Image, TextInput } from 'react-native';
+import React, {useEffect, useState} from 'react';
+import { StyleSheet, Text, View, Pressable, Image, TextInput, SafeAreaView, ScrollView } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createDrawerNavigator } from '@react-navigation/drawer';
+import * as SQLite from 'expo-sqlite';
+import * as WebBrowser from 'expo-web-browser';
 import * as SplashScreen from 'expo-splash-screen';
 
 SplashScreen.preventAutoHideAsync();
 setTimeout(SplashScreen.hideAsync, 2000);
 
 const basketballImage = require('./Images/bballimage.jpg');
+const performanceURL = 'https://oneupbasketball.com/basketball-player-rating/'
+
+function openDatabase() {
+  const db = SQLite.openDatabase("statTracker.db");
+  return db;
+}
+
+const db = openDatabase();
+
+function Items() {
+  const [items, setItems] = useState(null);
+
+  db.transaction((tx) => {
+    tx.executeSql(
+      `select id, points, rebounds, assists, steals, blocks, opponent, date(itemDate) as itemDate from items order by id desc;`,
+      [],
+      (_, {rows: {_array}}) => setItems(_array)
+    );
+  });
+
+  if(items === null || items.length === 0){
+    return null;
+  }
+
+  return (
+    <SafeAreaView style={styles.gameHistoryContainer}>
+      {items.map(({ id, points, rebounds, assists, steals, blocks, opponent, itemDate }) => {
+        return (
+          <Text key={id} style={styles.gameHistoryItem}>
+            {itemDate} |  {opponent} - P:{points}, R:{rebounds}, A:{assists}, S:{steals}, B:{blocks}
+          </Text>
+        )
+      })}
+    </SafeAreaView>
+  )
+}
 
 function EnterGameScreen({ navigation }){
   const [points, setPoints] = useState("");
@@ -16,6 +54,57 @@ function EnterGameScreen({ navigation }){
   const [steals, setSteals] = useState("");
   const [blocks, setBlocks] = useState("");
   const [opponent, setOpponent] = useState("");
+
+  useEffect(() => {
+    db.transaction((tx) => {
+      //tx.executeSql(
+        //"drop table items;"
+      //);
+      tx.executeSql(
+        "create table if not exists items (id integer primary key not null, opponent string, points integer, rebounds integer, assists integer, steals integer, blocks integer, itemDate real);"
+      );
+    });
+  }, []);
+
+  const add = () => {
+    if (points === null || points === "" || isNaN(points)){
+      return false;
+    }
+    if (rebounds === null || rebounds === "" || isNaN(rebounds)){
+      return false;
+    }
+    if (assists === null || assists === "" || isNaN(assists)){
+      return false;
+    }
+    if (steals === null || steals === "" || isNaN(steals)){
+      return false;
+    }
+    if (blocks === null || blocks === "" || isNaN(blocks)){
+      return false;
+    }
+    if (opponent == null || opponent === ""){
+      return false;
+    }
+
+    db.transaction((tx) => {
+      tx.executeSql("insert into items (points, rebounds, assists, steals, blocks, opponent, itemDate) values (?, ?, ?, ?, ?, ?, julianday('now'))", [points, rebounds, assists, steals, blocks, opponent]);
+      tx.executeSql("select * from items", [], (_, {rows}) =>
+        navigateToStats()
+        //navigation.navigate('Statistics')
+      );
+    });
+  };
+
+  const navigateToStats = () => {
+    navigation.navigate("Statistics", {
+      routeLastPoints: points,
+      routeLastRebounds: rebounds,
+      routeLastAssists: assists,
+      routeLastSteals: steals,
+      routeLastBlocks: blocks,
+      routeLastOpponent: opponent
+    })
+  }
 
   return (
     <View style={styles.gameContainer}>
@@ -46,14 +135,7 @@ function EnterGameScreen({ navigation }){
         onChangeText={input => setBlocks(input)}
       />
       <Pressable style={styles.button} onPress={() => {
-        navigation.navigate('Statistics', {
-          lastPoints: points,
-          lastRebounds: rebounds,
-          lastAssists: assists,
-          lastSteals: steals,
-          lastBlocks: blocks,
-          lastOpponent: opponent,
-        });
+        add();
       }}>
         <Text style={styles.buttonText}>Submit</Text>
       </Pressable>
@@ -62,16 +144,72 @@ function EnterGameScreen({ navigation }){
 } 
 
 function StatsScreen({ route }){
-  const { lastPoints } = route.params;
-  const { lastRebounds } = route.params;
-  const { lastAssists } = route.params;
-  const { lastSteals } = route.params;
-  const { lastBlocks } = route.params;
-  const { lastOpponent } = route.params;
+  const [lastPoints, setLastPoints] = useState("N/A");
+  const [lastRebounds, setLastRebounds] = useState("N/A");
+  const [lastAssists, setLastAssists] = useState("N/A");
+  const [lastSteals, setLastSteals] = useState("N/A");
+  const [lastBlocks, setLastBlocks] = useState("N/A");
+  const [lastOpponent, setLastOpponent] = useState("N/A");
+
+  const {routeLastPoints} = route.params;
+  const {routeLastRebounds} = route.params;
+  const {routeLastAssists} = route.params;
+  const {routeLastSteals} = route.params;
+  const {routeLastBlocks} = route.params;
+  const {routeLastOpponent} = route.params;
+
+  useEffect(() => {
+    db.transaction((tx) => {
+      tx.executeSql("select * from items", [], (_, {rows}) =>
+          getLastStats(rows)
+        );
+    })
+  })
+
+  const getLastStats = (rows) => {
+    if(routeLastPoints === undefined || routeLastRebounds === undefined || routeLastAssists === undefined ||
+      routeLastBlocks === undefined || routeLastSteals === undefined || routeLastOpponent === undefined) {
+      if(rows.length > 0){
+        db.transaction((tx) => {
+          tx.executeSql("select points from items order by itemDate desc limit 1", [], (_, {rows}) =>
+            setLastPoints(rows.item(0).points)
+          );
+          tx.executeSql("select rebounds from items order by itemDate desc limit 1", [], (_, {rows}) =>
+           setLastRebounds(rows.item(0).rebounds)
+          );
+          tx.executeSql("select assists from items order by itemDate desc limit 1", [], (_, {rows}) =>
+           setLastAssists(rows.item(0).assists)
+          );
+          tx.executeSql("select steals from items order by itemDate desc limit 1", [], (_, {rows}) =>
+           setLastSteals(rows.item(0).steals)
+          );
+          tx.executeSql("select blocks from items order by itemDate desc limit 1", [], (_, {rows}) =>
+           setLastBlocks(rows.item(0).blocks)
+          );
+          tx.executeSql("select opponent from items order by itemDate desc limit 1", [], (_, {rows}) =>
+           setLastOpponent(rows.item(0).opponent)
+          );
+        })
+      }
+    } else {
+      setLastPoints(routeLastPoints);
+      setLastRebounds(routeLastRebounds);
+      setLastAssists(routeLastAssists);
+      setLastBlocks(routeLastBlocks);
+      setLastSteals(routeLastSteals);
+      setLastOpponent(routeLastOpponent);
+    }
+    
+  }
 
   return(
-    <View style={styles.statsContainer}>
+    <SafeAreaView style={styles.statsContainer}>
       <Text style={styles.lastGameHeader}>Last Game</Text>
+      <Pressable style={styles.performanceLink}
+        onPress = {() => WebBrowser.openBrowserAsync(performanceURL)}
+      >
+        <Text style={styles.performanceText}>Performance Calculator</Text>
+      </Pressable>
       <Text style={styles.lastGameItem}>
         Player:   Caden Moore
       </Text>
@@ -93,7 +231,12 @@ function StatsScreen({ route }){
       <Text style={styles.lastGameItem}>
         Blocks:   {lastBlocks}
       </Text>
-    </View>
+      <Text style={styles.gameHistoryHeader}>Game History</Text>
+      <ScrollView style={styles.listArea}>
+        <Items />
+      </ScrollView>
+    </SafeAreaView>
+    
     
   )
 }
@@ -176,13 +319,18 @@ const styles = StyleSheet.create({
     fontSize: 30,
     fontWeight: 'bold',
     marginTop: 40,
-    marginBottom: 20,
+    marginBottom: 15,
     marginLeft: 50,
   },
   lastGameItem: {
     marginLeft: 50,
     marginBottom: 10,
     fontSize: 20,
+  },
+  gameHistoryContainer: {
+    marginTop: 20,
+    marginBottom: 16,
+    marginHorizontal: 16,
   },
   gameHistoryHeader: {
     textAlign: 'center',
@@ -192,8 +340,20 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   gameHistoryItem: {
-    marginLeft: 30,
+    marginLeft: 5,
     marginBottom: 5,
-    fontSize: 15,
+    fontSize: 16,
+  },
+  listArea: {
+    flex: 1,
+  },
+  performanceLink: {
+    marginLeft: 50,
+    marginBottom: 20,
+  },
+  performanceText: {
+    fontSize: 17,
+    color: '#0075FF',
+    fontWeight: 'bold',
   }
 });
